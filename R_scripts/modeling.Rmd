@@ -1,0 +1,224 @@
+---
+title: "eQTL"
+output:
+  html_document:
+    toc: true
+date: "2024-10-30"
+number_sections: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(gggenes)
+```
+
+Load data
+
+```{r}
+expression=read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/GeneExpressionLogFPKM.csv", check.names=F)
+variant=read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/Variants.csv")
+rd=read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/RD236a_MeanDepth.csv")
+chipseq=read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/literature/Turkarslan2015/mtb_tf.csv", check.names=F) 
+genes = read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/metadata/important_regions.csv")
+genes = genes%>%
+  mutate(layer = ifelse(gene_name!="RD8", "Gene", "Region of Difference") ) %>%
+  mutate(layer = as.factor(layer))%>%
+  filter(gene_name!="RD236a")
+RD236a = data.frame(start=4056800, end=4062600, from=4056945, to=4058396)
+RD236a$gene_name = 'RD236a'
+RD236a$layer = 2
+important_binding_sites =  read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/metadata/important_binding_sites.csv")
+important_binding_sites = important_binding_sites%>%
+  filter(effect=='activation')
+pcs = read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/VariantPCs.csv", row.names = 1)
+resultssavepath = "/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results"
+figsavepath = sprintf("%s/figures", resultssavepath)
+
+```
+
+```{r}
+table(paste0("Lineage ", rd$Lineage))
+```
+
+# Effect of RD8/RD236a
+## All lineages
+
+```{r}
+tmp = expression%>%
+  merge(rd, by="SampleID")
+```
+
+### RD8/RD236a on _espA_ Expression 
+
+```{r}
+target_gene = "Rv3616c"
+cutoff=rd$HasDeletion=="No Deletion"
+NormalGroup = tmp[cutoff,target_gene]
+DeletionGroup = tmp[!cutoff,target_gene]
+t.test(NormalGroup, DeletionGroup)
+wilcox.test(NormalGroup, DeletionGroup)
+```
+
+
+
+### RD8/RD236a on _espR_ Regulation for _espA_
+
+```{r}
+plt = tmp%>%
+  ggplot(aes(x = Rv3849, y = Rv3616c, color=HasDeletion))+
+  geom_point()+
+  geom_smooth(formula = 'y~x', method='lm', se=F)+
+  theme_bw()+
+  scale_color_brewer(palette = "Set2")
+ggsave(sprintf("%s/espA_espR.png", figsavepath), plt)
+plt
+```
+
+
+#### espA - espR correlation without RD8/RD236a
+```{r}
+other_TF = "Rv3849"
+cutoff=tmp$HasDeletion=="No Deletion"
+inputs = tmp[cutoff,c("Rv3616c", other_TF)]
+cor.test(inputs$Rv3616c, inputs[,other_TF])
+```
+
+#### espA - espR correlation with RD8/RD236a
+```{r}
+inputs = tmp[!cutoff,c("Rv3616c", other_TF)]
+cor.test(inputs$Rv3616c, inputs[,other_TF])
+```
+
+# Refine eQTL
+Changes:
+1. Transform expression from FKPM to Log FKPM
+2. Limit the range to the intergenic region of _espA_ and _ephA_
+3. Adjust for the lineages by PCA
+
+## PCA
+
+```{r}
+plt = genes %>%
+  ggplot(aes(xmin=start, xmax=end, y=layer)) +
+  geom_gene_arrow( aes(fill=layer) ) +
+  geom_text(aes(x=(start+end)/2, y=as.factor(layer), label=gene_name), vjust=-1, size=3 ) +
+  geom_subgene_arrow(data=RD236a, aes(xsubmin=from, xsubmax=to), fill="#b3b3b3" ) +
+  geom_text(data=RD236a, aes(x=(from+to)/2, y=layer, label=gene_name), vjust=-1, size=3 ) +
+  geom_rect(aes(xmin=4056375, xmax=4057733, ymin=0.5, ymax=1.5), fill='red', alpha=0.05)+
+  theme_genes() +
+  theme(
+    axis.text.y = element_text(angle=0, hjust=0.5),
+    legend.position = "bottom",
+    plot.title = element_text(hjust=0.5)
+    )+
+  labs(title = "espA Regulatory Region", x = "Position", y = "") +
+  scale_fill_brewer(palette = "Dark2")+
+  scale_color_manual(values=c("black", "#e41a1c"))+
+  scale_x_continuous(limits = c(4053000, 4063000), breaks=seq(4053000, 4063000, 2000))
+ggsave(sprintf("%s/espA_regulatory_region.png", figsavepath), plt, width=12, height=4)
+plt
+```
+
+## Run Analysis
+```{r}
+variant_indexer = data.frame(
+  var_id = colnames(variant)[2:ncol(variant)],
+  ref = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 1)),
+  pos = as.numeric(unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 2))),
+  alt = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 3))
+)
+
+variant_indexer = variant_indexer%>%
+  filter( pos>=4056375 & pos<=4057733 & str_length(ref)<1000 )
+
+eqtl_data = data.frame(espA = expression$Rv3616c,
+                      RD = ifelse(rd$HasDeletion=="No Deletion", 0, 1),
+                      PC1 = pcs$PC1,
+                      PC2 = pcs$PC2,
+                      PC3 = pcs$PC3,
+                      PC4 = pcs$PC4,
+                      PC5 = pcs$PC5,
+                      PC6 = pcs$PC6
+                      )
+regulatory_variants = t(variant[variant_indexer$var_id])
+regulatory_variants = regulatory_variants[duplicated(regulatory_variants)==FALSE,]
+eqtl_data = cbind(eqtl_data, t(regulatory_variants))
+```
+
+```{r}
+eqtl_model = lm(espA~., data=eqtl_data)
+eqtl_summary = summary(eqtl_model)
+write.csv(round(eqtl_summary$coefficients, 2), sprintf("%s/eqtl_coef.csv", resultssavepath))
+eqtl_summary
+```
+
+
+```{r message=FALSE, warning=FALSE}
+associative_sites = data.frame(position=c(4057036, 4056416, 4056693),
+                               layer=c("variant", "variant", "variant"))
+
+tss = data.frame(position=c(4056487, 4056684, 4056440),
+                 layer=c("TSS", "TSS", "TSS"))
+plt = genes %>%
+  ggplot(aes(xmin=start, xmax=end, y=layer)) +
+  geom_gene_arrow( aes(fill=layer) ) +
+  geom_subgene_arrow(data=RD236a, aes(xsubmin=from, xsubmax=to), fill="#b3b3b3" ) +
+  geom_text(data=RD236a, aes(x=(from+to)/2, label=gene_name), vjust=-1, size=3 ) +
+  geom_text(aes(x=(start+end)/2, y=as.factor(layer), label=gene_name), vjust=-1, size=3 ) +
+  geom_feature(data=important_binding_sites, aes(x=sites, y=as.factor(regulator)), vjust=-1, size=3 ) +
+   geom_feature(data=associative_sites, aes(x=position, y=as.factor(layer)), vjust=-1, size=3, color="red") +
+  geom_feature(data=tss, aes(x=position, y=as.factor(layer)), vjust=-1, size=3 ) +
+  geom_vline(xintercept = 4056800)+
+  geom_vline(xintercept = 4062600)+
+  theme_genes() +
+  theme(
+    axis.text.y = element_text(angle=0, hjust=0.5),
+    legend.position = "none",
+    plot.title = element_text(hjust=0.5)
+    )+
+  labs(title = "Variants & Binding Sites", x = "Position", y = "") +
+  scale_fill_brewer(palette = "Dark2")+
+  scale_color_manual(values=c("black", "#e41a1c"))
+ggsave(sprintf("%s/mutation_bindingsites.png", figsavepath), plt)
+plt
+```
+
+
+![Key Variant Locations](/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results/figures/mutation_locations.png)
+
+## Mathematic Modeling
+
+```{r}
+cor_data = data.frame(
+  espA = expression$Rv3616c,
+  SigF = expression$Rv3286c,
+  mprA = expression$Rv0981,
+  phoPxRD = expression$Rv0757 * ifelse(rd$HasDeletion=="No Deletion", 1, 0),
+  espRxRD = expression$Rv3849 * ifelse(rd$HasDeletion=="No Deletion", 1, 0),
+  A_4057036_G = variant$A_4057036_G,
+  C_4056416_A = variant$C_4056416_A,
+  G_4056693_T = variant$G_4056693_T,
+  PC1 = pcs$PC1, PC2 = pcs$PC2,
+  PC3 = pcs$PC3, PC4 = pcs$PC4,
+  PC5 = pcs$PC5, PC6 = pcs$PC6
+)
+
+model = cor_data%>%
+  lm(espA ~ ., data=.)
+math_summary = summary(model)
+write.csv(round(math_summary$coefficients,2), sprintf("%s/math_coef.csv", resultssavepath))
+math_summary
+```
+
+
+```{r}
+target_gene = "Rv3286c"
+cutoff=rd$HasDeletion=="No Deletion"
+NormalGroup = tmp[cutoff,target_gene]
+DeletionGroup = tmp[!cutoff,target_gene]
+t.test(NormalGroup, DeletionGroup, alternative="less")
+wilcox.test(NormalGroup, DeletionGroup, alternative="less")
+```
