@@ -13,6 +13,7 @@ library(ggplot2)
 library(tidyverse)
 library(gridExtra)
 library(gggenes)
+library(cowplot)
 ```
 
 Load data
@@ -32,7 +33,7 @@ RD236a$gene_name = 'RD236a'
 RD236a$layer = 2
 important_binding_sites =  read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/metadata/important_binding_sites.csv")
 important_binding_sites = important_binding_sites%>%
-  filter(effect=='activation')
+  filter(regulator%in%c("PhoP", "EspR", "MprA"))
 pcs = read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/VariantPCs.csv", row.names = 1)
 resultssavepath = "/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results"
 figsavepath = sprintf("%s/figures", resultssavepath)
@@ -41,6 +42,23 @@ figsavepath = sprintf("%s/figures", resultssavepath)
 
 ```{r}
 table(paste0("Lineage ", rd$Lineage))
+variant_indexer = data.frame(
+  var_id = colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))],
+  ref = unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 1)),
+  pos = as.numeric(unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 2))),
+  alt = unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 3))
+)
+variant_indexer = variant_indexer%>%
+  mutate(type = case_when(str_length(ref)>str_length(alt) ~ "del",
+                          str_length(ref)<str_length(alt) ~ "ins",
+                          str_length(ref)==str_length(alt) ~ "snp",
+                          ) )
+table(variant_indexer$type)
+variant[,c("SampleID","Lineage", "GT_4056480_G")] %>%
+  merge(rd, by=c("SampleID", "Lineage"))%>%
+  mutate(Lineage = paste0("Lineage ", Lineage))%>%
+  group_by(Lineage, HasDeletion, GT_4056480_G)%>%
+  summarise(count = n())
 ```
 
 # Effect of RD8/RD236a
@@ -48,7 +66,30 @@ table(paste0("Lineage ", rd$Lineage))
 
 ```{r}
 tmp = expression%>%
-  merge(rd, by="SampleID")
+  merge(rd, by=c("SampleID", "Lineage"))%>%
+  mutate(Lineage = paste0("Lineage ", Lineage))
+```
+
+```{r}
+plt = tmp%>%
+  select(Lineage, Rv3616c)%>%
+  group_by(Lineage)%>%
+  summarise(MEAN_EXPR = mean(Rv3616c),
+            SD_EXPR = sd(Rv3616c))%>%
+  ggplot()+
+  geom_col(aes(x=Lineage, y=MEAN_EXPR, fill=Lineage))+
+  geom_errorbar(aes(x=Lineage, y=MEAN_EXPR, 
+                    ymax=MEAN_EXPR+SD_EXPR, ymin=MEAN_EXPR-SD_EXPR),
+                width=0.5)+
+  geom_point(data=tmp, 
+             aes(x=Lineage, y=Rv3616c))+
+  theme_bw()+
+  theme(legend.position = 'none')+
+  scale_fill_brewer(palette = "Set2")+
+  scale_color_brewer(palette = "Set2")+
+  labs(x="", y="espA Expression Level")
+ggsave(sprintf("%s/espA_by_lineage.png", figsavepath), plt)
+plt
 ```
 
 ### RD8/RD236a on _espA_ Expression 
@@ -124,13 +165,6 @@ plt
 
 ## Run Analysis
 ```{r}
-variant_indexer = data.frame(
-  var_id = colnames(variant)[2:ncol(variant)],
-  ref = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 1)),
-  pos = as.numeric(unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 2))),
-  alt = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 3))
-)
-
 variant_indexer = variant_indexer%>%
   filter( pos>=4056375 & pos<=4057733 & str_length(ref)<1000 )
 
@@ -169,20 +203,21 @@ plt = genes %>%
   geom_text(data=RD236a, aes(x=(from+to)/2, label=gene_name), vjust=-1, size=3 ) +
   geom_text(aes(x=(start+end)/2, y=as.factor(layer), label=gene_name), vjust=-1, size=3 ) +
   geom_feature(data=important_binding_sites, aes(x=sites, y=as.factor(regulator)), vjust=-1, size=3 ) +
-   geom_feature(data=associative_sites, aes(x=position, y=as.factor(layer)), vjust=-1, size=3, color="red") +
-  geom_feature(data=tss, aes(x=position, y=as.factor(layer)), vjust=-1, size=3 ) +
-  geom_vline(xintercept = 4056800)+
-  geom_vline(xintercept = 4062600)+
+   # geom_feature(data=associative_sites, aes(x=position, y=as.factor(layer)), vjust=-1, size=3, color="red") +
+  # geom_feature(data=tss, aes(x=position, y=as.factor(layer)), vjust=-1, size=3 ) +
+  # geom_vline(xintercept = 4056800)+
+  # geom_vline(xintercept = 4062600)+
+  geom_rect(aes(xmin=4056375, xmax=4057733, ymin=0.5, ymax=1.5), fill='red', alpha=0.05)+
   theme_genes() +
   theme(
-    axis.text.y = element_text(angle=0, hjust=0.5),
+    axis.text.y = element_text(angle=0, hjust=0.5, size=10),
     legend.position = "none",
     plot.title = element_text(hjust=0.5)
     )+
-  labs(title = "Variants & Binding Sites", x = "Position", y = "") +
+  labs(title = "", x = "Position", y = "") +
   scale_fill_brewer(palette = "Dark2")+
   scale_color_manual(values=c("black", "#e41a1c"))
-ggsave(sprintf("%s/mutation_bindingsites.png", figsavepath), plt)
+ggsave(sprintf("%s/mutation_bindingsites.png", figsavepath), plt, width=12, height=6)
 plt
 ```
 
@@ -190,6 +225,25 @@ plt
 ![Key Variant Locations](/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results/figures/mutation_locations.png)
 
 ## Mathematic Modeling
+
+```{r}
+cor_data = data.frame(
+  espA = expression$Rv3616c,
+  SigF = expression$Rv3286c,
+  mprA = expression$Rv0981,
+  espRxRD = expression$Rv3849 * ifelse(rd$HasDeletion=="No Deletion", 1, 0),
+  A_4057036_G = variant$A_4057036_G,
+  C_4056416_A = variant$C_4056416_A,
+  G_4056693_T = variant$G_4056693_T,
+  PC1 = pcs$PC1, PC2 = pcs$PC2,
+  PC3 = pcs$PC3, PC4 = pcs$PC4,
+  PC5 = pcs$PC5, PC6 = pcs$PC6
+)
+
+model = cor_data%>%
+  lm(espA ~ ., data=.)
+summary(model)
+```
 
 ```{r}
 cor_data = data.frame(
@@ -211,6 +265,31 @@ model = cor_data%>%
 math_summary = summary(model)
 write.csv(round(math_summary$coefficients,2), sprintf("%s/math_coef.csv", resultssavepath))
 math_summary
+cor.test(cor_data$phoPxRD, cor_data$espRxRD)
+var(cor_data$phoPxRD)
+var(cor_data$espRxRD)
+```
+
+
+
+```{r}
+pred_res = data.frame(true = cor_data$espA, 
+                      pred = predict(model),
+                      resid = residuals(math_summary))
+left = pred_res%>%
+  ggplot(aes(x=pred, y=true))+
+  geom_point()+
+  geom_smooth(formula='y~x', method='lm')+
+  theme_bw()+
+  labs(x="Predicted espA Expression Level", y="True espA Expression Level")
+right = pred_res%>%
+  ggplot(aes(x=pred, y=resid))+
+  geom_point()+
+  geom_smooth(formula='y~x', method='lm')+
+  theme_bw()+
+  labs(x="Predicted espA Expression Level", y="Residuals")
+plt = plot_grid(left, right, ncol=2)
+plt
 ```
 
 
@@ -220,5 +299,40 @@ cutoff=rd$HasDeletion=="No Deletion"
 NormalGroup = tmp[cutoff,target_gene]
 DeletionGroup = tmp[!cutoff,target_gene]
 t.test(NormalGroup, DeletionGroup, alternative="less")
-wilcox.test(NormalGroup, DeletionGroup, alternative="less")
+```
+
+```{r}
+tmp = variant[,c("SampleID", "Lineage", "C_4056416_A")]%>%
+  merge(rd, by=c("SampleID", "Lineage"))%>%
+  mutate(Lineage = paste0("Lineage ", Lineage))
+
+tmp%>%
+  group_by(HasDeletion, C_4056416_A)%>%
+  summarise(count = n())
+
+fisher.test(tmp$HasDeletion, tmp$C_4056416_A)
+```
+
+```{r}
+tmp = expression%>%
+  merge(rd, by=c("SampleID", "Lineage"))%>%
+  mutate(Lineage = paste0("Lineage ", Lineage))
+plt = tmp%>%
+  select(HasDeletion, Rv3286c)%>%
+  group_by(HasDeletion)%>%
+  summarise(MEAN_EXPR = mean(Rv3286c),
+            SD_EXPR = sd(Rv3286c))%>%
+  ggplot()+
+  geom_col(aes(x=HasDeletion, y=MEAN_EXPR, fill=HasDeletion))+
+  geom_errorbar(aes(x=HasDeletion, y=MEAN_EXPR, 
+                    ymax=MEAN_EXPR+SD_EXPR, ymin=MEAN_EXPR-SD_EXPR),
+                width=0.5)+
+  # geom_point(data=tmp, aes(x=HasDeletion, y=Rv3286c))+
+  theme_bw()+
+  theme(legend.position = 'none')+
+  scale_fill_brewer(palette = "Set2")+
+  scale_color_brewer(palette = "Set2")+
+  labs(x="", y="SigF Expression Level")
+ggsave(sprintf("%s/sigF_by_lineage.png", figsavepath), plt)
+plt
 ```

@@ -1,13 +1,14 @@
 library(ggplot2)
 library(tidyverse)
 library(gridExtra)
+library(cowplot)
 variant=read.csv("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/data/processed_data/Variants.csv")
 
 variant_indexer = data.frame(
-  var_id = colnames(variant)[2:ncol(variant)],
-  ref = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 1)),
-  pos = as.numeric(unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 2))),
-  alt = unlist(lapply(strsplit(colnames(variant)[2:ncol(variant)], "_"), `[`, 3))
+  var_id = colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))],
+  ref = unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 1)),
+  pos = as.numeric(unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 2))),
+  alt = unlist(lapply(strsplit(colnames(variant)[!(colnames(variant) %in% c("Lineage", "SampleID"))], "_"), `[`, 3))
 )
 
 variant_indexer = variant_indexer%>%
@@ -28,6 +29,7 @@ variance_explained = data.frame(
 
 plt = ggplot(variance_explained)+
   geom_point(aes(x=PC, y=variance))+
+  geom_text(aes(x=PC, y=variance+0.01, label=round(cumsum(variance), 2)))+
   geom_line(aes(x=PC, y=variance, group=1))+
   scale_x_discrete(limits=colnames(pcs)[1:15])+
   theme_bw()
@@ -36,25 +38,33 @@ ggsave("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results/
 
 
 plt_pc1_pc2 = ggplot(pcs)+
-  geom_point(aes(x=PC1, y=PC2, color=Lineage))+
-  scale_color_brewer(palette = "Set2")+
-  theme_bw()
+  geom_point(aes(x=PC1, y=PC2, fill=Lineage), size=5, shape=21, color='white')+
+  scale_fill_brewer(palette = "Set2")+
+  theme_bw()+
+  theme(axis.text = element_text(size=20),
+        axis.title = element_text(size=20),
+        legend.position = "none")
 
 plt_pc3_pc4 = ggplot(pcs)+
-  geom_point(aes(x=PC3, y=PC4, color=Lineage))+
-  scale_color_brewer(palette = "Set2")+
-  theme_bw()
+  geom_point(aes(x=PC3, y=PC4, fill=Lineage), size=5, shape=21, color='white')+
+  scale_fill_brewer(palette = "Set2")+
+  theme_bw()+
+  theme(axis.text = element_text(size=20),
+        axis.title = element_text(size=20),
+        legend.position = "none")
 
 plt_pc5_pc6 = ggplot(pcs)+
-  geom_point(aes(x=PC5, y=PC6, color=Lineage))+
-  scale_color_brewer(palette = "Set2")+
-  theme_bw()
+  geom_point(aes(x=PC5, y=PC6, fill=Lineage), size=5, shape=21, color='white')+
+  scale_fill_brewer(palette = "Set2")+
+  theme_bw()+
+  theme(axis.text = element_text(size=20),
+        axis.title = element_text(size=20),
+        legend.text = element_text(size=20),
+        legend.title = element_text(size=20),
+        legend.key.height = unit(2, "cm"),
+        legend.position = c(1.6,0.45),
+        legend.key.width = unit(1,"cm"))
 
-plt_pc7_pc8 = ggplot(pcs)+
-  geom_point(aes(x=PC7, y=PC8, color=Lineage))+
-  scale_color_brewer(palette = "Set2")+
-  theme_bw()
+plt = plot_grid(plt_pc1_pc2, plt_pc3_pc4, plt_pc5_pc6, ncol=2, align='hv')
 
-plt = grid.arrange(plt_pc1_pc2, plt_pc3_pc4, plt_pc5_pc6, plt_pc7_pc8, ncol=2)
-
-ggsave("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results/figures/lineage_pcs.png", plt, width=10, height=10)
+ggsave("/Users/miaojiazheng/Desktop/Harvard/Projects/Mycobacterium/eQTL/results/figures/lineage_pcs.png", plt, width=15, height=15)
